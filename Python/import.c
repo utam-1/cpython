@@ -4239,9 +4239,20 @@ register_lazy_on_parent(PyThreadState *tstate, PyObject *name, PyObject *source)
         PyObject *value = cached != NULL && cached != Py_None ? Py_None : source;
         int err = -1;
         if (submodules != NULL && !PyErr_Occurred()) {
-            err = source == Py_None ?
-                PyDict_SetDefaultRef(submodules, child, value, NULL) :
-                PyDict_SetItem(submodules, child, value);
+            if (source == Py_None) {
+                err = PyDict_SetDefaultRef(submodules, child, value, NULL);
+            }
+            else {
+                // Keep an earlier pending declaration, so that errors raised
+                // while resolving the child point to it.
+                PyObject *existing = NULL;
+                err = value == Py_None ? 0 :
+                    PyDict_GetItemRef(submodules, child, &existing);
+                if (err >= 0 && (existing == NULL || existing == Py_None)) {
+                    err = PyDict_SetItem(submodules, child, value);
+                }
+                Py_XDECREF(existing);
+            }
         }
         Py_XDECREF(cached);
         Py_DECREF(child);

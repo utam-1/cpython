@@ -535,6 +535,23 @@ class IndependentSubmoduleTests(LazyImportTestCase):
             exec('assert xml.dom.__name__ == "xml.dom"', first)
         """)
 
+    def test_traceback_points_to_first_declaration(self):
+        self.check("""
+            import builtins, traceback
+            first = {'__builtins__': builtins}
+            second = {'__builtins__': builtins}
+            exec(compile('lazy import xml.missing', 'first.py', 'exec'), first)
+            exec(compile('lazy import xml.missing', 'second.py', 'exec'), second)
+            try:
+                exec('xml.missing', first)
+            except ModuleNotFoundError as exc:
+                text = ''.join(traceback.format_exception(exc))
+                assert 'first.py' in text, text
+                assert 'second.py' not in text, text
+            else:
+                raise AssertionError('ModuleNotFoundError was not raised')
+        """)
+
     def test_retry_after_recursive_access(self):
         self.check("""
             import sys, xml

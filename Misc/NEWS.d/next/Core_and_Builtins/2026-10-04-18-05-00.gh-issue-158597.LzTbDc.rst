@@ -1,0 +1,2 @@
+Fix the traceback of a failed :keyword:`lazy import` of a submodule pointing
+to a declaration in another module instead of the one being resolved.
