@@ -1309,8 +1309,12 @@ class date:
         return bytes([yhi, ylo, self._month, self._day]),
 
     def __setstate(self, string):
-        yhi, ylo, self._month, self._day = string
-        self._year = yhi * 256 + ylo
+        yhi, ylo, month, day = string
+        year = yhi * 256 + ylo
+        year, month, day = _check_date_fields(year, month, day)
+        self._year = year
+        self._month = month
+        self._day = day
 
     def __reduce__(self):
         return (self.__class__, self._getstate())
@@ -1770,14 +1774,21 @@ class time:
     def __setstate(self, string, tzinfo):
         if tzinfo is not None and not isinstance(tzinfo, _tzinfo_class):
             raise TypeError("bad tzinfo state arg")
-        h, self._minute, self._second, us1, us2, us3 = string
+        h, minute, second, us1, us2, us3 = string
         if h > 127:
-            self._fold = 1
-            self._hour = h - 128
+            fold = 1
+            hour = h - 128
         else:
-            self._fold = 0
-            self._hour = h
-        self._microsecond = (((us1 << 8) | us2) << 8) | us3
+            fold = 0
+            hour = h
+        microsecond = (((us1 << 8) | us2) << 8) | us3
+        hour, minute, second, microsecond, fold = _check_time_fields(
+            hour, minute, second, microsecond, fold)
+        self._hour = hour
+        self._minute = minute
+        self._second = second
+        self._microsecond = microsecond
+        self._fold = fold
         self._tzinfo = tzinfo
 
     def __reduce_ex__(self, protocol):
@@ -2421,16 +2432,27 @@ class datetime(date):
     def __setstate(self, string, tzinfo):
         if tzinfo is not None and not isinstance(tzinfo, _tzinfo_class):
             raise TypeError("bad tzinfo state arg")
-        (yhi, ylo, m, self._day, self._hour,
-         self._minute, self._second, us1, us2, us3) = string
+        (yhi, ylo, m, day, hour,
+         minute, second, us1, us2, us3) = string
         if m > 127:
-            self._fold = 1
-            self._month = m - 128
+            fold = 1
+            month = m - 128
         else:
-            self._fold = 0
-            self._month = m
-        self._year = yhi * 256 + ylo
-        self._microsecond = (((us1 << 8) | us2) << 8) | us3
+            fold = 0
+            month = m
+        year = yhi * 256 + ylo
+        microsecond = (((us1 << 8) | us2) << 8) | us3
+        year, month, day = _check_date_fields(year, month, day)
+        hour, minute, second, microsecond, fold = _check_time_fields(
+            hour, minute, second, microsecond, fold)
+        self._year = year
+        self._month = month
+        self._day = day
+        self._hour = hour
+        self._minute = minute
+        self._second = second
+        self._microsecond = microsecond
+        self._fold = fold
         self._tzinfo = tzinfo
 
     def __reduce_ex__(self, protocol):

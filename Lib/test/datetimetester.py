@@ -61,6 +61,14 @@ pickle_choices = [(pickle, pickle, proto)
                   for proto in range(pickle.HIGHEST_PROTOCOL + 1)]
 assert len(pickle_choices) == pickle.HIGHEST_PROTOCOL + 1
 
+class _BadReduce:
+    def __init__(self, target_cls, args):
+        self.target_cls = target_cls
+        self.args = args
+
+    def __reduce__(self):
+        return (self.target_cls, self.args)
+
 EPOCH_NAIVE = datetime(1970, 1, 1, 0, 0)  # For calculating transitions
 
 # An arbitrary collection of objects of non-datetime types, for testing
@@ -2120,10 +2128,90 @@ class TestDate(HarmlessMixedComparison, unittest.TestCase):
                 self.theclass(bytes([1] * len(base)), 'EST')
 
         for ord_byte in range(1, 13):
-            # This shouldn't blow up because of the month byte alone.  If
-            # the implementation changes to do more-careful checking, it may
-            # blow up because other fields are insane.
-            self.theclass(base[:2] + bytes([ord_byte]) + base[3:])
+            # The base contains out-of-range fields, so this raises ValueError.
+            self.assertRaises(ValueError, self.theclass,
+                              base[:2] + bytes([ord_byte]) + base[3:])
+
+        valid_base = self._make_raw_bytes(year=1995, month=1, day=25)
+        for ord_byte in range(1, 13):
+            self.theclass(valid_base[:2] + bytes([ord_byte]) + valid_base[3:])
+
+    def _make_raw_bytes(self, year=1, month=1, day=1,
+                         hour=0, minute=0, second=0, microsecond=0, fold=0):
+        yhi, ylo = divmod(year, 256)
+        m = month
+        if fold:
+            m |= 128
+        b = bytes([yhi, ylo, m, day])
+        if issubclass(self.theclass, datetime):
+            b += bytes([
+                hour,
+                minute,
+                second,
+                (microsecond >> 16) & 0xff,
+                (microsecond >> 8) & 0xff,
+                microsecond & 0xff,
+            ])
+        return b
+
+    def test_unpickle_invalid_fields(self):
+        # gh-160358: Validating bounds when unpickling or passing bytes to constructor
+        # Year 0
+        bad_year0 = self._make_raw_bytes(year=0)
+        with self.assertRaisesRegex(ValueError, r"^year must be in 1\.\.9999, not 0$"):
+            self.theclass(bad_year0)
+
+        # Year 10000
+        bad_year10000 = self._make_raw_bytes(year=10000)
+        self.assertRaises(ValueError, self.theclass, bad_year10000)
+
+        # Day 0
+        self.assertRaises(ValueError, self.theclass, self._make_raw_bytes(day=0))
+
+        # Day 32
+        self.assertRaises(ValueError, self.theclass, self._make_raw_bytes(day=32))
+
+        # Month-specific day checks: Feb 30, and Feb 29 in non-leap year
+        self.assertRaises(ValueError, self.theclass,
+                          self._make_raw_bytes(year=2023, month=2, day=30))
+        self.assertRaises(ValueError, self.theclass,
+                          self._make_raw_bytes(year=2023, month=2, day=29))
+
+        # Feb 29 in leap year succeeds
+        dt = self.theclass(self._make_raw_bytes(year=2024, month=2, day=29))
+        self.assertEqual((dt.year, dt.month, dt.day), (2024, 2, 29))
+
+        if issubclass(self.theclass, datetime):
+            # Invalid time fields
+            self.assertRaises(ValueError, self.theclass, self._make_raw_bytes(minute=60))
+            self.assertRaises(ValueError, self.theclass, self._make_raw_bytes(second=60))
+            self.assertRaises(ValueError, self.theclass, self._make_raw_bytes(microsecond=1_000_000))
+
+            # Fold bit set
+            dt = self.theclass(self._make_raw_bytes(year=2023, fold=1))
+            self.assertEqual(dt.fold, 1)
+            self.assertEqual(dt.year, 2023)
+
+            # Valid with tzinfo
+            dt = self.theclass(self._make_raw_bytes(year=2023, fold=1), timezone.utc)
+            self.assertEqual(dt.tzinfo, timezone.utc)
+            self.assertEqual(dt.fold, 1)
+
+            # Invalid with tzinfo
+            with self.assertRaisesRegex(ValueError, r"^year must be in 1\.\.9999, not 0$"):
+                self.theclass(bad_year0, timezone.utc)
+            self.assertRaises(ValueError, self.theclass, self._make_raw_bytes(minute=60), timezone.utc)
+
+        # Via pickle across all protocols
+        for proto in range(pickle.HIGHEST_PROTOCOL + 1):
+            payload = pickle.dumps(_BadReduce(self.theclass, (bad_year0,)), proto)
+            with self.assertRaisesRegex(ValueError, r"^year must be in 1\.\.9999, not 0$"):
+                pickle.loads(payload)
+
+            if issubclass(self.theclass, datetime):
+                payload_tz = pickle.dumps(_BadReduce(self.theclass, (bad_year0, timezone.utc)), proto)
+                with self.assertRaisesRegex(ValueError, r"^year must be in 1\.\.9999, not 0$"):
+                    pickle.loads(payload_tz)
 
     def test_valuerror_messages(self):
         pattern = re.compile(
@@ -4656,6 +4744,36 @@ class TestTime(HarmlessMixedComparison, unittest.TestCase):
         # Good bytes, but bad tzinfo:
         with self.assertRaisesRegex(TypeError, '^bad tzinfo state arg$'):
             self.theclass(bytes([1] * len(base)), 'EST')
+
+    def test_unpickle_invalid_fields(self):
+        # Invalid minute (60)
+        self.assertRaises(ValueError, self.theclass, bytes([0, 60, 0, 0, 0, 0]))
+        # Invalid second (60)
+        self.assertRaises(ValueError, self.theclass, bytes([0, 0, 60, 0, 0, 0]))
+        # Invalid microsecond (1000000)
+        self.assertRaises(ValueError, self.theclass,
+                          bytes([0, 0, 0, (1000000 >> 16) & 0xff, (1000000 >> 8) & 0xff, 1000000 & 0xff]))
+
+        # With fold bit set
+        t = self.theclass(bytes([128 | 12, 30, 0, 0, 0, 0]))
+        self.assertEqual(t.fold, 1)
+        self.assertEqual(t.hour, 12)
+        self.assertEqual(t.minute, 30)
+
+        # With tzinfo
+        t = self.theclass(bytes([12, 30, 0, 0, 0, 0]), timezone.utc)
+        self.assertEqual(t.tzinfo, timezone.utc)
+
+        # Invalid field with tzinfo
+        self.assertRaises(ValueError, self.theclass, bytes([0, 60, 0, 0, 0, 0]), timezone.utc)
+
+        # Via pickle across all protocols
+        bad_time = bytes([0, 60, 0, 0, 0, 0])
+        for proto in range(pickle.HIGHEST_PROTOCOL + 1):
+            payload = pickle.dumps(_BadReduce(self.theclass, (bad_time,)), proto)
+            self.assertRaises(ValueError, pickle.loads, payload)
+            payload_tz = pickle.dumps(_BadReduce(self.theclass, (bad_time, timezone.utc)), proto)
+            self.assertRaises(ValueError, pickle.loads, payload_tz)
 
 # A mixin for classes with a tzinfo= argument.  Subclasses must define
 # theclass as a class attribute, and theclass(1, 1, 1, tzinfo=whatever)

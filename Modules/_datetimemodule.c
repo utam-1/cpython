@@ -3218,11 +3218,17 @@ static PyGetSetDef date_getset[] = {
 static PyObject *
 date_from_pickle(PyTypeObject *type, PyObject *state)
 {
-    PyDateTime_Date *me;
+    const unsigned char *pdata = (const unsigned char *)PyBytes_AS_STRING(state);
+    int year = (pdata[0] << 8) | pdata[1];
+    int month = pdata[2];
+    int day = pdata[3];
 
-    me = (PyDateTime_Date *) (type->tp_alloc(type, 0));
+    if (check_date_args(year, month, day) < 0) {
+        return NULL;
+    }
+
+    PyDateTime_Date *me = (PyDateTime_Date *) (type->tp_alloc(type, 0));
     if (me != NULL) {
-        const char *pdata = PyBytes_AS_STRING(state);
         memcpy(me->data, pdata, _PyDateTime_DATE_DATASIZE);
         me->hashcode = -1;
     }
@@ -4700,7 +4706,6 @@ static PyGetSetDef time_getset[] = {
 static PyObject *
 time_from_pickle(PyTypeObject *type, PyObject *state, PyObject *tzinfo)
 {
-    PyDateTime_Time *me;
     char aware = (char)(tzinfo != Py_None);
 
     if (aware && check_tzinfo_subclass(tzinfo) < 0) {
@@ -4708,10 +4713,18 @@ time_from_pickle(PyTypeObject *type, PyObject *state, PyObject *tzinfo)
         return NULL;
     }
 
-    me = (PyDateTime_Time *) (type->tp_alloc(type, aware));
-    if (me != NULL) {
-        const char *pdata = PyBytes_AS_STRING(state);
+    const unsigned char *pdata = (const unsigned char *)PyBytes_AS_STRING(state);
+    int hour = pdata[0] & 0x7F;
+    int minute = pdata[1];
+    int second = pdata[2];
+    int microsecond = (pdata[3] << 16) | (pdata[4] << 8) | pdata[5];
 
+    if (check_time_args(hour, minute, second, microsecond, 0) < 0) {
+        return NULL;
+    }
+
+    PyDateTime_Time *me = (PyDateTime_Time *) (type->tp_alloc(type, aware));
+    if (me != NULL) {
         memcpy(me->data, pdata, _PyDateTime_TIME_DATASIZE);
         me->hashcode = -1;
         me->hastzinfo = aware;
@@ -5502,7 +5515,6 @@ static PyGetSetDef datetime_getset[] = {
 static PyObject *
 datetime_from_pickle(PyTypeObject *type, PyObject *state, PyObject *tzinfo)
 {
-    PyDateTime_DateTime *me;
     char aware = (char)(tzinfo != Py_None);
 
     if (aware && check_tzinfo_subclass(tzinfo) < 0) {
@@ -5510,10 +5522,24 @@ datetime_from_pickle(PyTypeObject *type, PyObject *state, PyObject *tzinfo)
         return NULL;
     }
 
-    me = (PyDateTime_DateTime *) (type->tp_alloc(type , aware));
-    if (me != NULL) {
-        const char *pdata = PyBytes_AS_STRING(state);
+    const unsigned char *pdata = (const unsigned char *)PyBytes_AS_STRING(state);
+    int year = (pdata[0] << 8) | pdata[1];
+    int month = pdata[2] & 0x7F;
+    int day = pdata[3];
+    int hour = pdata[4];
+    int minute = pdata[5];
+    int second = pdata[6];
+    int microsecond = (pdata[7] << 16) | (pdata[8] << 8) | pdata[9];
 
+    if (check_date_args(year, month, day) < 0) {
+        return NULL;
+    }
+    if (check_time_args(hour, minute, second, microsecond, 0) < 0) {
+        return NULL;
+    }
+
+    PyDateTime_DateTime *me = (PyDateTime_DateTime *) (type->tp_alloc(type , aware));
+    if (me != NULL) {
         memcpy(me->data, pdata, _PyDateTime_DATETIME_DATASIZE);
         me->hashcode = -1;
         me->hastzinfo = aware;

@@ -1,0 +1,1 @@
+Raise :exc:`ValueError` instead of creating invalid objects when deserializing or constructing :class:`datetime.date`, :class:`datetime.time`, or :class:`datetime.datetime` from raw serialized bytes with out-of-range fields.
